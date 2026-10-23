@@ -1,0 +1,17 @@
+{
+  "name": "뽀샤시 사진관",
+  "short_name": "뽀샤시",
+  "description": "사진을 찍으면 주름은 부드럽게, 피부는 환하게 다듬어 갤러리에 저장해 드려요.",
+  "lang": "ko",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fff0f6",
+  "theme_color": "#ffd6e6",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
