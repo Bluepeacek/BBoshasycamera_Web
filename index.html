@@ -30,7 +30,7 @@
 html { background: var(--bg); }
 body {
   margin: 0; min-height: 100vh;
-  font-family: var(--font); font-size: 20px; line-height: 1.55; color: var(--ink);
+  font-family: var(--font); font-size: 20px; line-height: 1.55; color: var(--ink); word-break: keep-all;
   background:
     radial-gradient(circle at 0% 0%, #ffd3e4 0, rgba(255,211,228,0) 42%),
     radial-gradient(circle at 100% 14%, #ffe6f0 0, rgba(255,230,240,0) 38%),
@@ -111,6 +111,21 @@ h2 { font-size: 22px; margin: 0 0 8px; color: var(--pink-deep); }
 .presets button[aria-pressed="true"], .seg button[aria-pressed="true"] {
   border-color: var(--pink); background: var(--pink-soft); color: var(--pink-deep);
 }
+/* 주름 더 지우기 스위치 */
+.sw {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%;
+  min-height: 80px; padding: 12px 18px; border-radius: 22px; border: 2.5px solid var(--line);
+  background: var(--card); color: var(--ink); font: inherit; text-align: left; cursor: pointer;
+}
+.sw-text { display: flex; flex-direction: column; }
+.sw-text b { font-size: 22px; line-height: 1.25; color: var(--pink-deep); }
+.sw-text small { font-size: 16px; color: var(--muted); line-height: 1.3; }
+.sw-track { flex: none; width: 72px; height: 40px; border-radius: 20px; background: #d9c6cf; position: relative; transition: background .15s; }
+.sw-knob { position: absolute; top: 4px; left: 4px; width: 32px; height: 32px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.25); transition: transform .15s; }
+.sw[aria-checked="true"] { border-color: var(--pink); background: var(--pink-soft); }
+.sw[aria-checked="true"] .sw-track { background: linear-gradient(135deg, #ee5d98, #c9296a); }
+.sw[aria-checked="true"] .sw-knob { transform: translateX(32px); }
+.sw[aria-checked="true"] .sw-text b::after { content: " · 켜짐"; font-weight: 500; }
 details { background: var(--card); border: 1.5px solid var(--line); border-radius: 20px; padding: 2px 16px; }
 summary { min-height: 56px; display: flex; align-items: center; font-weight: 700; cursor: pointer; color: var(--pink-deep); }
 details img { width: 100%; height: auto; border-radius: 14px; display: block; margin: 10px 0 14px; }
@@ -181,6 +196,11 @@ input[type=range] { width: 100%; height: 44px; accent-color: var(--pink); }
       </div>
     </div>
 
+    <button type="button" id="wrinkle" class="sw" role="switch" aria-checked="false">
+      <span class="sw-text"><b>주름 더 지우기</b><small>눈가·입가 주름을 더 부드럽게</small></span>
+      <span class="sw-track" aria-hidden="true"><span class="sw-knob"></span></span>
+    </button>
+
     <div class="seg" role="group" aria-label="보기 선택">
       <button type="button" id="vAfter" aria-pressed="true">보정한 사진</button>
       <button type="button" id="vBefore" aria-pressed="false">원래 사진</button>
@@ -213,7 +233,9 @@ input[type=range] { width: 100%; height: 44px; accent-color: var(--pink); }
   const CFG = { max: 1600, r1f: 0.0074, eps1: 0.0020, r2f: 0.0170, eps2: 0.0060, sigf: 0.0093, maskr: 0.009, wb: 0.6, warm: 0 };
   const PRESETS = { soft: { w: 0.45, g: 0.35, b: 0.60 }, pretty: { w: 0.70, g: 0.60, b: 0.95 }, max: { w: 0.95, g: 0.85, b: 1.00 } };
   const $ = (id) => document.getElementById(id);
-  const st = { W: 0, H: 0, N: 0, I: null, S1: null, S2: null, G: null, M: null, gain: [1, 1, 1], out: null, view: "after", p: { ...PRESETS.pretty }, ready: false, saved: false, everSaved: false };
+  const st = { W: 0, H: 0, N: 0, I: null, cur: null, cache: {}, wrinkle: false, out: null, view: "after", p: { ...PRESETS.pretty }, ready: false, saved: false, everSaved: false };
+  // '주름 더 지우기'를 켜 두었으면 다음에도 켜진 채로 시작해요.
+  try { st.wrinkle = localStorage.getItem("bosasi-wrinkle") === "1"; } catch (e) {}
 
   // ---------- 필터 도구 ----------
   function box(src, dst, w, h, r, tmp) {
@@ -325,11 +347,74 @@ input[type=range] { width: 100%; height: 44px; accent-color: var(--pink); }
   }
   const CURVE = new Float32Array(256); for (let i = 0; i < 256; i++) CURVE[i] = pchip(i);
 
+  // ---------- 주름 더 지우기 ----------
+  // 피부 안에서 주변보다 어두운 선과 골(주름)을 찾아서 주변 피부 밝기 쪽으로 끌어올려요.
+  //  - 가는 선(눈가) → 중간 폭 → 넓은 골(팔자) 순서로 세 가지 크기를 차례로 봐요.
+  //  - 너무 깊게 어두운 곳(눈동자, 속눈썹, 안경테, 입 안쪽)은 주름이 아니라서 건드리지 않아요.
+  //  - 피부결(작은 무늬)은 그대로 남겨서 얼굴이 밀랍처럼 뭉개지지 않아요.
+  const CREASE = {
+    scales: [{ f: 0.008, k: 0.88 }, { f: 0.018, k: 0.82 }, { f: 0.034, k: 0.72 }],
+    d0: 0.045, d1: 0.15, // 어두운 정도(0~1): d0까지는 주름으로 보고 전부, d1을 넘으면 주름이 아닌 것으로 봐요.
+  };
+  function ss(t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+  function liftCreases(img, W, H, opts) {
+    opts = opts || {};
+    const N = W * H, short = Math.min(W, H), src = img.data;
+    const t1 = new Float32Array(N), t2 = new Float32Array(N), tmp = new Float32Array(N);
+    const blur3 = (a, dst, r) => { box(a, t1, W, H, r, tmp); box(t1, t2, W, H, r, tmp); box(t2, dst, W, H, r, tmp); };
+    const L = new Float32Array(N), m0 = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const R = src[4 * i], Gc = src[4 * i + 1], Bc = src[4 * i + 2];
+      const Y = 0.299 * R + 0.587 * Gc + 0.114 * Bc;
+      const Cb = 128 - 0.168736 * R - 0.331264 * Gc + 0.5 * Bc, Cr = 128 + 0.5 * R - 0.418688 * Gc - 0.081312 * Bc;
+      L[i] = Y / 255;
+      m0[i] = (Y > 40 && Cb > 77 && Cb < 127 && Cr > 133 && Cr < 173) ? 1 : 0;
+    }
+    const Lb = new Float32Array(N), ms = new Float32Array(N);
+    blur3(L, Lb, Math.max(1, Math.round(0.0035 * short))); // 피부결을 뺀 밝기
+    blur3(m0, ms, Math.max(2, Math.round(0.006 * short)));
+    const lift = new Float32Array(N), num = new Float32Array(N), den = new Float32Array(N), prod = new Float32Array(N);
+    const kmul = opts.kmul, d1add = opts.d1add;
+    for (const sc of CREASE.scales) {
+      const r = Math.max(3, Math.round(sc.f * short));
+      for (let i = 0; i < N; i++) prod[i] = Lb[i] * m0[i];
+      blur3(prod, num, r); blur3(m0, den, r);
+      for (let i = 0; i < N; i++) {
+        const dn = den[i]; if (dn < 0.4) continue;
+        const d = num[i] / dn - Lb[i]; if (d <= 0) continue;
+        const d1 = CREASE.d1 + (d1add ? d1add[i] : 0);
+        const g = d < CREASE.d0 ? 1 : 1 - ss((d - CREASE.d0) / (d1 - CREASE.d0));
+        if (g <= 0) continue;
+        const v = sc.k * (kmul ? kmul[i] : 1) * g * d * ss((dn - 0.4) / 0.3);
+        if (v > lift[i]) lift[i] = v;
+      }
+    }
+    const out = new ImageData(W, H), o = out.data;
+    for (let i = 0; i < N; i++) {
+      const k = 4 * i, l = L[i];
+      const dl = lift[i] * ss((ms[i] - 0.55) / 0.3);
+      const ratio = Math.min(1.7, (l + dl) / Math.max(l, 0.03));
+      o[k] = src[k] * ratio; o[k + 1] = src[k + 1] * ratio; o[k + 2] = src[k + 2] * ratio; o[k + 3] = 255;
+    }
+    return out;
+  }
+
+  // 보정에 쓰는 준비물 한 벌(원래 사진 기준 / 주름을 더 지운 사진 기준). 한 번 만들면 보관해 둬요.
+  function getSet(wrinkle) {
+    const key = wrinkle ? "on" : "off";
+    if (!st.cache[key]) {
+      const base = wrinkle ? liftCreases(st.I, st.W, st.H) : st.I;
+      const r = prepare(base, st.W, st.H, CFG);
+      st.cache[key] = { src: base, S1: r.S1, S2: r.S2, G: r.G, M: r.M, gain: r.gain };
+    }
+    return st.cache[key];
+  }
+
   function render(p) {
-    const { N, I, S1, S2, G, M, out } = st; const src = I.data, o = out.data;
+    const { N, out } = st; const { S1, S2, G, M } = st.cur; const src = st.cur.src.data, o = out.data;
     const t = p.b, alpha = 0.7 * p.g, bloom = 0.18 * p.g, bs = 0.4 + 0.6 * p.w, wr = p.w;
     const lut = [0, 1, 2].map((c) => {
-      const L = new Uint8ClampedArray(256), gain = st.gain[c] * (c === 0 ? 1 + CFG.warm * t : c === 2 ? 1 - CFG.warm * t : 1);
+      const L = new Uint8ClampedArray(256), gain = st.cur.gain[c] * (c === 0 ? 1 + CFG.warm * t : c === 2 ? 1 - CFG.warm * t : 1);
       for (let x = 0; x < 256; x++) {
         const v = Math.min(255, x * (1 + (gain - 1) * t));
         const lo = v | 0, cv = CURVE[lo] + (CURVE[Math.min(255, lo + 1)] - CURVE[lo]) * (v - lo);
@@ -429,10 +514,10 @@ input[type=range] { width: 100%; height: 44px; accent-color: var(--pink); }
         W = Math.round(W * sc); H = Math.round(H * sc);
         cv.width = W; cv.height = H; ctx.drawImage(img, 0, 0, W, H);
         const I = ctx.getImageData(0, 0, W, H);
-        const r = prepare(I, W, H, CFG);
-        st.p = { ...PRESETS.pretty };
-        Object.assign(st, r, { W, H, N: W * H, I, out: ctx.createImageData(W, H), ready: true });
-        URL.revokeObjectURL(url); render(st.p); show(); syncControls(); markPreset(); setView("after");
+        Object.assign(st, { W, H, N: W * H, I, out: ctx.createImageData(W, H), cache: {} });
+        st.cur = getSet(st.wrinkle);
+        st.p = { ...PRESETS.pretty }; st.ready = true;
+        URL.revokeObjectURL(url); render(st.p); show(); syncControls(); markPreset(); setView("after"); syncWrinkle();
         setMsg(""); showSaveState();
         if (autoSave) saveToGallery();
       } catch (e) { setMsg("사진을 고치지 못했어요. 다른 사진으로 다시 해보세요."); }
@@ -445,6 +530,18 @@ input[type=range] { width: 100%; height: 44px; accent-color: var(--pink); }
   $("cam").addEventListener("change", (e) => { loadFile(e.target.files[0], true); e.target.value = ""; });
   $("pick").addEventListener("change", (e) => { loadFile(e.target.files[0], false); e.target.value = ""; });
   $("save").addEventListener("click", () => { saveToGallery(); });
+  function syncWrinkle() { $("wrinkle").setAttribute("aria-checked", st.wrinkle ? "true" : "false"); }
+  $("wrinkle").addEventListener("click", () => {
+    if (!st.ready) return;
+    st.wrinkle = !st.wrinkle; syncWrinkle();
+    try { localStorage.setItem("bosasi-wrinkle", st.wrinkle ? "1" : "0"); } catch (e) {}
+    const first = !st.cache[st.wrinkle ? "on" : "off"];
+    if (first) setMsg("주름을 더 지우는 중이에요. 잠깐만 기다려 주세요…");
+    setTimeout(() => {
+      st.cur = getSet(st.wrinkle);
+      setMsg(""); setView("after"); update();
+    }, first ? 40 : 0);
+  });
   $("vAfter").addEventListener("click", () => setView("after"));
   $("vBefore").addEventListener("click", () => setView("before"));
   document.querySelectorAll(".presets button").forEach((b) => b.addEventListener("click", () => {
@@ -476,7 +573,7 @@ input[type=range] { width: 100%; height: 44px; accent-color: var(--pink); }
     window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
   }
 
-  window.__wc = { CFG, PRESETS, st, prepare, render, loadFile };
+  window.__wc = { CFG, PRESETS, CREASE, st, prepare, render, loadFile, liftCreases, getSet, show };
 })();
 </script>
 </body>
