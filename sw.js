@@ -1,6 +1,6 @@
 // 한 번 열어 두면 인터넷이 약해도 앱이 열리도록 파일을 폰에 보관합니다.
 // 새 버전을 올렸을 때는 아래 버전 숫자를 올리면 모든 폰이 새 파일을 받습니다.
-const CACHE = "bosasi-v2";
+const CACHE = "bosasi-v3";
 const FILES = [
   "./",
   "index.html",
